@@ -32,12 +32,6 @@ def CryptDeriveKey(passphrase):
     """
     return md5(passphrase).digest()[:5] + b'\x00'*11 
 
-class KixtartInstruction:
-
-    def __init__(self, raw):
-        self.raw = bytearray(raw)
-        assert self.raw[0] == 0xEC
-        
         
 class Kixtart:
     def __init__(self, path, dump_dir=None):
@@ -327,9 +321,7 @@ class Kixtart:
                         self.script[first_line-1] = f'Function {function}'
                     if not self.script[last_line+1]:
                         self.script[last_line+1] = 'EndFunction'                
-                print('END')
                 return 
-                
 
             self.logger.critical(f'Failed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
             return
