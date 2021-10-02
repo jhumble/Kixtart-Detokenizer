@@ -70,19 +70,80 @@ class Kixtart:
         return self.tokenized
 
     def parse_labels(self, data):
-        self.labels = {}
+        labels = {}
         string = ''
         i = 0
         while i < len(data):
             if data[i] == 0:
                 idx = int.from_bytes(data[i+1:i+5], byteorder='little')
-                self.labels[idx] = string
+                labels[idx] = string
                 string = ''
                 i += 5
             else:
                 string += chr(data[i])
                 i += 1
+        return labels
 
+    def parse_functions(self):
+        i = 0
+        buf = self.function_data
+        self.logger.debug(f'Parsing function data {hexlify(buf).decode("utf-8")}')
+        # TODO have not looked into parsing scripts relying on multiple files
+        filename = ''
+        while buf[i] != 0:
+            filename += chr(buf[i])
+            i += 1
+        i+= 1 # eat null terminator for filename
+        while i < len(buf):
+            start = i
+            try:
+                function_name = ''
+                while buf[i] != 0:
+                    function_name += chr(buf[i])
+                    i += 1
+                i+= 5 # Seems to always be d9 ff ff ff 
+                if buf[i] == 0:
+                    i += 1
+                    parameters = []
+                else:
+                    parameter_types = ''
+                    while buf[i] != 0:
+                        parameter_types += chr(buf[i])
+                        i += 1
+                    i += 1
+                    parameters = []
+                    for j in range(0, len(parameter_types)):
+                        param = ''
+                        while buf[i] != 0:
+                            param += chr(buf[i])
+                            i += 1
+                        i += 1
+                        parameters.append('$' + param)
+                function_length = int.from_bytes(buf[i:i+4], byteorder='little')
+                i +=4
+                function_data = buf[i:i+function_length]
+                i += function_length
+                label_length = int.from_bytes(buf[i:i+4], byteorder='little')
+                self.logger.debug(f'label length: {label_length}')
+                labels = {}
+                i += 4 # label length
+                if label_length:
+                    label_data = buf[i:i+label_length]
+                    labels = self.parse_labels(label_data)
+                    self.logger.debug(f'Label data: {hexlify(label_data)}')
+                    self.logger.debug(f'Labels: {labels}')
+                    i += label_length
+
+                #func = f'{filename}.{function_name}({",".join(parameters)})'
+                func = f'{function_name}({",".join(parameters)})'
+                #self.logger.debug(f'{func}: {hexlify(function_data).decode("utf-8")}')
+                self.detokenize(function_data, labels, func)
+                i += 1
+            except:
+                self.logger.error(f'Failed to parse remaining function data {hexlify(buf[start:])}')
+                return 
+                
+            
     def dump(self):
         script_name = os.path.splitext(os.path.basename(self.path))[0] + '.kix'
         path = os.path.join(self.dump_dir, script_name) 
@@ -90,38 +151,82 @@ class Kixtart:
         with open(path, 'w') as fp:
             fp.write(os.linesep.join(self.script))
                 
-     
+    def trim_script(self):
+        # trim beginning and ending lines from script
+        last = 0
+        first = 0
+        for i in range(0, len(self.script)):
+            if self.script[i]:
+                if first == 0:
+                    first = i
+                last = i
+        self.script = self.script[first:last+1]
+        
+        #remove excessive whitespace (likely, where comments used to be)
+        filtered = [self.script[0]]
+        for i in range(1, len(self.script)):
+            if self.script[i] == '' and self.script[i-1] == '':
+                pass
+            else:
+                filtered.append(self.script[i])
+        self.script = filtered 
+
     def parse(self):
-        self.script = ['']*10000
+        self.script = ['']*9999
+
         labels_offset = self.code_length
         labels_length = int.from_bytes(self.tokenized[labels_offset:labels_offset+4], byteorder='little')
         self.logger.debug(f'label length: {labels_length:02X}')
         raw_label_data = self.tokenized[labels_offset+4:labels_offset+labels_length]
         self.logger.debug(hexlify(raw_label_data))
-        self.parse_labels(raw_label_data)
+        labels = self.parse_labels(raw_label_data)
         
         
         self.logger.debug(f'Raw label data: {raw_label_data}')
-        self.logger.info(f'Labels: {self.labels}')
+        self.logger.info(f'Labels: {labels}')
         vars_offset = labels_offset + labels_length + 4
-        self.vars_length = int.from_bytes(self.tokenized[vars_offset:vars_offset+4], byteorder='little')
-        self.variables = self.tokenized[vars_offset+4:vars_offset+4+self.vars_length].split(b'\x00')
-        self.logger.info(f'Variables: {self.variables}')
+        vars_length = int.from_bytes(self.tokenized[vars_offset:vars_offset+4], byteorder='little')
+        self.variables = self.tokenized[vars_offset+4:vars_offset+4+vars_length].split(b'\x00')
+        self.logger.info(f'Variables: ')
+        for i in range(0, len(self.variables)):
+            self.logger.info(f'\t{i:02X}: {self.variables[i]}')
 
+        functions_offset = vars_offset + vars_length
+        functions_length = int.from_bytes(self.tokenized[functions_offset:functions_offset+4], byteorder='little')
+        self.function_data = self.tokenized[functions_offset+4:functions_offset+functions_length]
+
+        self.detokenize(self.tokenized, labels=labels, function=None)
+        
+        if self.function_data:
+            #self.logger.debug(f'Function data: {hexlify(self.function_data).decode("utf-8")}')
+            self.parse_functions()
+        self.trim_script()
+
+    def detokenize(self, buf, labels=None, function=None):
+        self.logger.debug(f'Detokenize {function}: {hexlify(buf)}, labels={labels}, function={function}')
         i = 0
         line_num = 0
         label_count = 0
-        buf = self.tokenized
+        first_line = 9999
+        last_line = 0
         while True:
             b = buf[i]
-            n = buf[i+1]
+            try:
+                n = buf[i+1]
+            except:
+                n = 0
             # parse line number
             if b in [0xEC, 0xED]:
                 # 0xEC - 1 byte line num, 0xED - 2 byte line num
                 offset_size = b - 0xEB
                 line_num = int.from_bytes(buf[i+1:i+1+offset_size], byteorder='little')
+                #record first and last lines, so that if this is a function, we can wrap it in function XYZ and endfunction
+                if line_num < first_line:
+                    first_line = line_num
+                if line_num > last_line:
+                    last_line = line_num
                 try:
-                    self.script[line_num] += ':' + self.labels[i] + '\n'
+                    self.script[line_num] += ':' + labels[i] + '\n'
                 except:
                     # No label for this line
                     pass
@@ -138,6 +243,11 @@ class Kixtart:
             if b == 0xDB:
                 self.script[line_num] += str(int.from_bytes(buf[i+1:i+3], byteorder='little'))
                 i += 3
+                continue
+            # I have no idea what this is
+            if b == 0xDC:
+                self.logger.warning('Unknown command 0xDC. Skipping 5 bytes')
+                i += 5
                 continue
             # String literal - inline
             if b == 0xDE:
@@ -194,7 +304,7 @@ class Kixtart:
                 if n in functions:
                     self.script[line_num] += functions[n]
                 else:
-                    self.logger.warning(f'Unrecognized keyword 0x{n:02X}, using <UNKNOWN_KEYWORD>')
+                    self.logger.warning(f'Unrecognized function 0x{n:02X}, using <UNKNOWN_KEYWORD>')
                     self.script[line_num] += '<UNKNOWN_KEYWORD>'
                 i += 2
                 continue
@@ -212,15 +322,12 @@ class Kixtart:
 
             # End Script
             if b == 0xF1:
-                # trim beginning and ending lines from script
-                last = 0
-                first = 0
-                for i in range(0, len(self.script)):
-                    if self.script[i]:
-                        if first == 0:
-                            first = i
-                        last = i
-                self.script = self.script[first:last+1]
+                if function:
+                    if not self.script[first_line-1]:
+                        self.script[first_line-1] = f'Function {function}'
+                    if not self.script[last_line+1]:
+                        self.script[last_line+1] = 'EndFunction'                
+                print('END')
                 return 
                 
 
