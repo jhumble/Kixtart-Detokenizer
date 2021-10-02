@@ -60,9 +60,9 @@ class Kixtart:
         self.ciphertext = self.data[0x16:]
         
     def decrypt(self):
-        arc4 = ARC4.new(key=self.session_key, drop=0)
+        arc4 = ARC4.new(key=self.session_key)
         self.logger.info(f'[*]\tdecrypting with session key {hexlify(self.session_key).decode("utf-8")}')
-        token_data = arc4.decrypt(self.ciphertext)
+        token_data = arc4.decrypt(bytes(self.ciphertext))
         self.code_length = int.from_bytes(token_data[:4], byteorder='little')
         self.tokenized = token_data[4:]
         self.logger.debug(f'raw tokenized script: {hexlify(self.tokenized).decode("utf-8")}')
