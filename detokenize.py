@@ -3,7 +3,6 @@ import os
 from hashlib import md5
 from binascii import hexlify, unhexlify
 from Crypto.Cipher import ARC4
-from rc4 import CustomRC4
 from constants import macros, operators, functions
 
 def CryptDeriveKey(passphrase):
