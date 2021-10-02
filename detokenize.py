@@ -1,9 +1,27 @@
 import sys
 import os
+import logging
 from hashlib import md5
 from binascii import hexlify, unhexlify
 from Crypto.Cipher import ARC4
 from constants import macros, operators, functions
+from argparse import ArgumentParser
+
+def parse_args():
+    usage = "detokenize.py [OPTION]... [FILES]..."
+    arg_parser = ArgumentParser(description=usage)
+    arg_parser.add_argument('-v', '--verbose', action='count', default=0, 
+        help='Increase verbosity. Can specify multiple times for more verbose output')
+    arg_parser.add_argument("-d", "--dump", dest="dump_dir", action="store", default=None,
+      help="Dump path for discovered PE files")
+    arg_parser.add_argument('files', nargs='+')
+    return arg_parser.parse_args()
+
+def configure_logger(log_level):
+    log_levels = {0: logging.ERROR, 1: logging.WARNING, 2: logging.INFO, 3: logging.DEBUG}
+    log_level = min(max(log_level, 0), 3) #clamp to 0-3 inclusive
+    logging.basicConfig(level=log_levels[log_level], 
+            format='%(asctime)s - %(name)s - %(levelname)-8s %(message)s')
 
 def CryptDeriveKey(passphrase):
     """
@@ -20,11 +38,18 @@ class KixtartInstruction:
         
         
 class Kixtart:
-    def __init__(self, path):
+    def __init__(self, path, dump_dir=None):
+        self.logger = logging.getLogger('Kixtart-Detokenizer')
         self.path = path
+        if not dump_dir:
+            self.dump_dir = '.'
+        else:
+            self.dump_dir = dump_dir
+
         with open(path, 'rb') as fp:
             self.data = bytearray(fp.read())
         self.header = self.data[:6]
+
         #TODO one of these bytes should actually indicate if it is encrypted or not
         if self.header != b'\x1a\xaf\x06\x00\x00\x10':
             raise Exception(f'Unrecognized header {hexlify(self.header)}')
@@ -34,12 +59,10 @@ class Kixtart:
         
     def decrypt(self):
         arc4 = ARC4.new(key=self.session_key, drop=0)
-        print(f'[*]\tdecrypting with session key {hexlify(self.session_key)}')
+        self.logger.info(f'[*]\tdecrypting with session key {hexlify(self.session_key).decode("utf-8")}')
         token_data = arc4.decrypt(self.ciphertext)
         self.code_length = int.from_bytes(token_data[:4], byteorder='little')
         self.tokenized = token_data[4:]
-        #if self.plaintext[:4] != b'\x34\x01\x00\x00':
-        #    raise Exception(f'Failed to decrypt')
         self.parse()
         return self.tokenized
 
@@ -61,23 +84,22 @@ class Kixtart:
         
      
     def parse(self):
-
         self.script = ['']*1000
-
         labels_offset = self.code_length
         labels_length = int.from_bytes(self.tokenized[labels_offset:labels_offset+4], byteorder='little')
-        #print(f'label length: {labels_length:02X}')
+        self.logger.debug(f'label length: {labels_length:02X}')
         raw_label_data = self.tokenized[labels_offset+4:labels_offset+labels_length]
-        #print(hexlify(raw_label_data))
+        self.logger.debug(hexlify(raw_label_data))
         self.parse_labels(raw_label_data)
         
         
-        #self.labels = [x for x in self.tokenized[labels_offset+4:labels_offset+4+labels_length].split(b'\x00') if x]
-        #print(self.labels)
+        self.logger.debug(f'Raw label data: {raw_label_data}')
+        self.logger.info(f'Labels: {self.labels}')
         vars_offset = labels_offset + labels_length + 4
         self.vars_length = int.from_bytes(self.tokenized[vars_offset:vars_offset+4], byteorder='little')
         self.variables = self.tokenized[vars_offset+4:vars_offset+4+self.vars_length].split(b'\x00')
-        #print(self.variables)
+        self.logger.info(f'Variables: {self.variables}')
+
         i = 0
         line_num = 0
         label_count = 0
@@ -134,8 +156,8 @@ class Kixtart:
                 if n in macros:
                     self.script[line_num] += '@' + macros[n]
                 else:
-                    print(f'unrecognized @ var 0x{n:02X}')
-                    self.script[line_num] += '@???'
+                    self.logger.warning(f'unrecognized macro 0x{n:02X}, using <UNKNOWN_MACRO>')
+                    self.script[line_num] += '@<UNKNOWN_MACRO>'
                 i += 2
                 continue
             # Variable name from vars table
@@ -164,8 +186,8 @@ class Kixtart:
                 if n in functions:
                     self.script[line_num] += functions[n]
                 else:
-                    print(f'[!]\tUnrecognized keyword 0x{n:02X}')
-                    self.script[line_num] += '???'
+                    self.logger.warning(f'Unrecognized keyword 0x{n:02X}, using <UNKNOWN_KEYWORD>')
+                    self.script[line_num] += '<UNKNOWN_KEYWORD>'
                 i += 2
                 continue
             # Single char literal + null
@@ -183,15 +205,26 @@ class Kixtart:
             # End Script
             if b == 0xF1:
                 return 
-            print(f'[!]\tFailed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
+            self.logger.critical(f'Failed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
             return
             
-for arg in sys.argv[1:]:
-    kix = Kixtart(arg)
-    kix.decrypt()
-    #print(hexlify(kix.tokenized))
-    print()
-    for line in kix.script:
-        if line:
-            print(line)
+
+def main():
+    options = parse_args()
+    if options.dump_dir:
+        if not os.path.exists(options.dump_dir):
+            os.makedirs(options.dump_dir)
+    configure_logger(options.verbose)
+
+    for arg in options.files:
+        kix = Kixtart(arg)
+        kix.decrypt()
+        kix.logger.debug(f'raw tokenized script: {hexlify(kix.tokenized).decode("utf-8")}')
+        print()
+        for line in kix.script:
+            if line:
+                print(line)
     
+if __name__ == '__main__':
+    main()
+
