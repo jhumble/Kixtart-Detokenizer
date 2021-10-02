@@ -13,7 +13,9 @@ def parse_args():
     arg_parser.add_argument('-v', '--verbose', action='count', default=0, 
         help='Increase verbosity. Can specify multiple times for more verbose output')
     arg_parser.add_argument("-d", "--dump", dest="dump_dir", action="store", default=None,
-      help="Dump path for discovered PE files")
+      help="Dump path for output scripts")
+    arg_parser.add_argument("-p", "--print", dest="print", action="store_true", default=False,
+      help="Write detokenized scripts to stdout")
     arg_parser.add_argument('files', nargs='+')
     return arg_parser.parse_args()
 
@@ -63,6 +65,7 @@ class Kixtart:
         token_data = arc4.decrypt(self.ciphertext)
         self.code_length = int.from_bytes(token_data[:4], byteorder='little')
         self.tokenized = token_data[4:]
+        self.logger.debug(f'raw tokenized script: {hexlify(self.tokenized).decode("utf-8")}')
         self.parse()
         return self.tokenized
 
@@ -79,12 +82,17 @@ class Kixtart:
             else:
                 string += chr(data[i])
                 i += 1
+
+    def dump(self):
+        script_name = os.path.splitext(os.path.basename(self.path))[0] + '.kix'
+        path = os.path.join(self.dump_dir, script_name) 
+        self.logger.info(f'Writing detokenized version of {self.path} to {path}')
+        with open(path, 'w') as fp:
+            fp.write(os.linesep.join(self.script))
                 
-         
-        
      
     def parse(self):
-        self.script = ['']*1000
+        self.script = ['']*10000
         labels_offset = self.code_length
         labels_length = int.from_bytes(self.tokenized[labels_offset:labels_offset+4], byteorder='little')
         self.logger.debug(f'label length: {labels_length:02X}')
@@ -204,7 +212,18 @@ class Kixtart:
 
             # End Script
             if b == 0xF1:
+                # trim beginning and ending lines from script
+                last = 0
+                first = 0
+                for i in range(0, len(self.script)):
+                    if self.script[i]:
+                        if first == 0:
+                            first = i
+                        last = i
+                self.script = self.script[first:last+1]
                 return 
+                
+
             self.logger.critical(f'Failed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
             return
             
@@ -219,11 +238,11 @@ def main():
     for arg in options.files:
         kix = Kixtart(arg)
         kix.decrypt()
-        kix.logger.debug(f'raw tokenized script: {hexlify(kix.tokenized).decode("utf-8")}')
-        print()
-        for line in kix.script:
-            if line:
-                print(line)
+        kix.dump()
+        if options.print:
+            print()
+            print(f'[{arg}]')
+            print(os.linesep.join(kix.script))
     
 if __name__ == '__main__':
     main()
