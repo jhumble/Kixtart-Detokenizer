@@ -82,147 +82,116 @@ class Kixtart:
         i = 0
         line_num = 0
         label_count = 0
+        buf = self.tokenized
         while True:
+            b = buf[i]
+            n = buf[i+1]
             # parse line number
-            if self.tokenized[i] == 0xEC:
-                #denotes a signed short line number
-                line_num = self.tokenized[i+1]
+            if b in [0xEC, 0xED]:
+                # 0xEC - 1 byte line num, 0xED - 2 byte line num
+                offset_size = b - 0xEB
+                line_num = int.from_bytes(buf[i+1:i+1+offset_size], byteorder='little')
                 try:
                     self.script[line_num] += ':' + self.labels[i] + '\n'
                 except:
                     # No label for this line
                     pass
-                    #print('No label for line {line_num}')
-                i += 2
-                continue
-            if self.tokenized[i] == 0xED:
-                #denotes a signed short line number
-                line_num = int.from_bytes(self.tokenized[i+1:i+3], byteorder='little')
-                try:
-                    self.script[line_num] += ':' + self.labels[i] + '\n'
-                except:
-                    # No label for this line
-                    pass
-                    #print('No label for line {line_num}')
-                i += 3
+                i += 1 + offset_size
                 continue
             
-            if self.tokenized[i] == 0xDF:
-                #variable - name inline
-                i += 1
-                name = '$'
-                while self.tokenized[i] != 0:
-                    name += chr(self.tokenized[i])
-                    i += 1
-                self.script[line_num] += name
-                i += 1
-                continue
-            """
-            if self.tokenized[i] == 0x07:
-                # label, each time a label is encountered we just grab the next label from our array of them
-                label = self.labels[label_count].decode('utf-8')
-                label_count += 1
-                self.script[line_num] += ':' + label 
-                i += 1
-                continue
-            """
-                
-            if self.tokenized[i] in operators:
-                self.script[line_num] += f'{operators[self.tokenized[i]]}'
-                i += 1
-                continue
-            if self.tokenized[i] == 0xDA:
-                #int const
-                self.script[line_num] += str(self.tokenized[i+1])
+
+            # 1 byte int
+            if b == 0xDA:
+                self.script[line_num] += str(n)
                 i += 2
                 continue
-            if self.tokenized[i] == 0xDB:
-                # 2 byte int
-                self.script[line_num] += str(int.from_bytes(self.tokenized[i+1:i+3], byteorder='little'))
+            # 2 byte int
+            if b == 0xDB:
+                self.script[line_num] += str(int.from_bytes(buf[i+1:i+3], byteorder='little'))
                 i += 3
                 continue
-            if self.tokenized[i] == 0xDE:
-                # string literal in-line
+            # String literal - inline
+            if b == 0xDE:
                 i += 1
                 name = ''
-                while self.tokenized[i] != 0:
-                    name += chr(self.tokenized[i])
+                while buf[i] != 0:
+                    name += chr(buf[i])
                     i += 1
                 self.script[line_num] += f'"{name}"'
                 i += 1
                 continue
-            if self.tokenized[i] == 0xE7:
-                # Fetch variable name from vars table
-                #TODO is this null terminated or 2 bytes?
-                offset = int.from_bytes(self.tokenized[i+1:i+3], byteorder='little')
-                self.script[line_num] += '$' + self.variables[offset].decode('utf-8')
-                i += 3
+            # Variable name - inline
+            if b == 0xDF:
+                i += 1
+                name = '$'
+                while buf[i] != 0:
+                    name += chr(buf[i])
+                    i += 1
+                self.script[line_num] += name
+                i += 1
                 continue
-            if self.tokenized[i] == 0xE8:
-                # object method -  Fetch method name from vars table
-                #TODO is this null terminated or 2 bytes?
-                offset = int.from_bytes(self.tokenized[i+1:i+3], byteorder='little')
-                self.script[line_num] += '.' + self.variables[offset].decode('utf-8')
-                i += 3
-                continue
-            if self.tokenized[i] == 0xE9:
-                # Fetch variable name from vars table
-                #TODO is this null terminated or 2 bytes?
-                offset = int.from_bytes(self.tokenized[i+1:i+3], byteorder='little')
-                self.script[line_num] += self.variables[offset].decode('utf-8')
-                i += 3
-                continue
-            if self.tokenized[i] == 0xEA:
-                # Keyword
-                if self.tokenized[i+1] in functions:
-                    self.script[line_num] += functions[self.tokenized[i+1]]
+            # Macro
+            if b == 0xE0:
+                if n in macros:
+                    self.script[line_num] += '@' + macros[n]
                 else:
-                    print(f'Unrecognized keyword 0x{self.tokenized[i+1]:02X}')
-                    self.script[line_num] += '???'
-                i += 2
-                continue
-            if self.tokenized[i] == 0xEF:
-                #single character + null
-                self.script[line_num] += chr(self.tokenized[i+1]) 
-                i += 3
-                continue
-
-            if self.tokenized[i] == 0xE0:
-                if self.tokenized[i+1] in macros:
-                    self.script[line_num] += '@' + macros[self.tokenized[i+1]]
-                else:
-                    print(f'unrecognized @ var 0x{self.tokenized[i+1]:02X}')
+                    print(f'unrecognized @ var 0x{n:02X}')
                     self.script[line_num] += '@???'
                 i += 2
                 continue
-                
-                
-            if self.tokenized[i] == 0xF1:
+            # Variable name from vars table
+            if b == 0xE7:
+                #TODO is this null terminated or 2 bytes?
+                offset = int.from_bytes(buf[i+1:i+3], byteorder='little')
+                self.script[line_num] += '$' + self.variables[offset].decode('utf-8')
+                i += 3
+                continue
+            # object method -  Fetch method name from vars table
+            if b == 0xE8:
+                #TODO is this null terminated or 2 bytes?
+                offset = int.from_bytes(buf[i+1:i+3], byteorder='little')
+                self.script[line_num] += '.' + self.variables[offset].decode('utf-8')
+                i += 3
+                continue
+            # Function? name from var table
+            if b == 0xE9:
+                #TODO is this null terminated or 2 bytes?
+                offset = int.from_bytes(buf[i+1:i+3], byteorder='little')
+                self.script[line_num] += self.variables[offset].decode('utf-8')
+                i += 3
+                continue
+            # Keyword
+            if b == 0xEA:
+                if n in functions:
+                    self.script[line_num] += functions[n]
+                else:
+                    print(f'Unrecognized keyword 0x{n:02X}')
+                    self.script[line_num] += '???'
+                i += 2
+                continue
+            # Single char literal + null
+            if b == 0xEF:
+                self.script[line_num] += chr(n) 
+                i += 3
+                continue
+
+            # check operators/symbols
+            if b in operators:
+                self.script[line_num] += f'{operators[b]}'
+                i += 1
+                continue
+
+            # End Script
+            if b == 0xF1:
                 return 
-            print(f'Failed to parse token {self.tokenized[i]:02X} in {hexlify(self.tokenized[i-2:i+3])}')
+            print(f'Failed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
             return
             
-                
-                
-            
-        for instr in self.tokenized[4::8]:
-            try:
-                instr = bytearray(instr)
-                print(self.parse_instr(instr))
-            except:
-                pass
-            
-    
-    def print(self):
-        print(f'Code length: 0x{self.code_length:04X}')
-
 for arg in sys.argv[1:]:
     kix = Kixtart(arg)
     kix.decrypt()
-    print(hexlify(kix.tokenized))
-    kix.print()
+    #print(hexlify(kix.tokenized))
     print()
-    print('SCRIPT:')
     for line in kix.script:
         if line:
             print(line)
