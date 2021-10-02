@@ -35,7 +35,7 @@ class Kixtart:
         
     def decrypt(self):
         arc4 = ARC4.new(key=self.session_key, drop=0)
-        print(f'decrypting ciphertext: {hexlify(self.ciphertext[:8])}...')
+        print(f'[*]\tdecrypting with session key {hexlify(self.session_key)}')
         token_data = arc4.decrypt(self.ciphertext)
         self.code_length = int.from_bytes(token_data[:4], byteorder='little')
         self.tokenized = token_data[4:]
@@ -67,18 +67,18 @@ class Kixtart:
 
         labels_offset = self.code_length
         labels_length = int.from_bytes(self.tokenized[labels_offset:labels_offset+4], byteorder='little')
-        print(f'label length: {labels_length:02X}')
+        #print(f'label length: {labels_length:02X}')
         raw_label_data = self.tokenized[labels_offset+4:labels_offset+labels_length]
-        print(hexlify(raw_label_data))
+        #print(hexlify(raw_label_data))
         self.parse_labels(raw_label_data)
         
         
         #self.labels = [x for x in self.tokenized[labels_offset+4:labels_offset+4+labels_length].split(b'\x00') if x]
-        print(self.labels)
+        #print(self.labels)
         vars_offset = labels_offset + labels_length + 4
         self.vars_length = int.from_bytes(self.tokenized[vars_offset:vars_offset+4], byteorder='little')
         self.variables = self.tokenized[vars_offset+4:vars_offset+4+self.vars_length].split(b'\x00')
-        print(self.variables)
+        #print(self.variables)
         i = 0
         line_num = 0
         label_count = 0
@@ -165,7 +165,7 @@ class Kixtart:
                 if n in functions:
                     self.script[line_num] += functions[n]
                 else:
-                    print(f'Unrecognized keyword 0x{n:02X}')
+                    print(f'[!]\tUnrecognized keyword 0x{n:02X}')
                     self.script[line_num] += '???'
                 i += 2
                 continue
@@ -184,7 +184,7 @@ class Kixtart:
             # End Script
             if b == 0xF1:
                 return 
-            print(f'Failed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
+            print(f'[!]\tFailed to parse token {b:02X} in {hexlify(buf[i-2:i+3])}')
             return
             
 for arg in sys.argv[1:]:
